@@ -38,7 +38,7 @@ def obtener_tramo_real(punto_a, punto_b):
     return [], 0
 
 @st.cache_data
-def cargar_base_coordenadas(file_path):
+def cargar_base_COORDENADAS GOR(file_path):
     df = pd.read_excel(file_path, header=6)
     df.columns = df.columns.astype(str).str.strip()
     df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
