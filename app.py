@@ -40,14 +40,14 @@ def obtener_tramo_real(punto_a, punto_b):
 @st.cache_data
 def cargar_base_coordenadas(file_path):
     # Se mantiene header=6 asumiendo que los títulos están en la fila 7
-    df = pd.read_excel(file_path, header=0)
+    df = pd.read_excel(file_path, header=6)
     # Limpieza de nombres de columnas para evitar errores de espacios
     df.columns = df.columns.astype(str).str.strip()
     
-    df['lat_dec'] = df['LATITUD'].apply(dms_to_decimal)
-    df['lon_dec'] = df['LONGITUD'].apply(dms_to_decimal)
+    df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
+    df['lon_dec'] = df['Longitud'].apply(dms_to_decimal)
     
-    return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('CLUSTER').agg({
+    return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('Clúster').agg({
         'lat_dec': 'first', 'lon_dec': 'first', 'POZO': lambda x: ', '.join(x.astype(str))
     }).reset_index()
 
