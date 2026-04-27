@@ -3,11 +3,11 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 import re
-import requests # Necesario para consultar el motor de rutas
+import requests
 
 st.set_page_config(page_title="Logística Rubiales - Rutas Reales", layout="wide")
 
-# 1. Conversión DMS a Decimal (Se mantiene)
+# 1. Conversión DMS a Decimal
 def dms_to_decimal(dms_str):
     try:
         if pd.isna(dms_str) or str(dms_str).strip() == "": return None
@@ -21,78 +21,85 @@ def dms_to_decimal(dms_str):
     except:
         return None
 
-# 2. Función para obtener la geometría de la carretera (OSRM)
+# 2. Función para obtener la geometría de la carretera
 def obtener_ruta_real(puntos):
     if len(puntos) < 2: return []
-    
-    # Construir la URL para OSRM (formato: lon,lat;lon,lat)
     coords_url = ";".join([f"{p['lon']},{p['lat']}" for p in puntos])
     url = f"http://router.project-osrm.org/route/v1/driving/{coords_url}?overview=full&geometries=geojson"
-    
     try:
         response = requests.get(url, timeout=5)
         data = response.json()
         if data['code'] == 'Ok':
-            # OSRM devuelve [longitud, latitud], Folium necesita [latitud, longitud]
-            linea_real = [[coord[1], coord[0]] for coord in data['routes'][0]['geometry']['coordinates']]
-            return linea_real
-    except Exception as e:
-        st.warning(f"No se pudo calcular la ruta por carretera (usando línea recta): {e}")
+            return [[coord[1], coord[0]] for coord in data['routes'][0]['geometry']['coordinates']]
+    except:
+        pass
     return []
 
-# 3. Carga de datos (Se mantiene optimizada)
 @st.cache_data
 def cargar_base_coordenadas(file_path):
     df = pd.read_excel(file_path, header=6)
     df.columns = df.columns.astype(str).str.strip()
     df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
     df['lon_dec'] = df['Longitud'].apply(dms_to_decimal)
-    df_validos = df.dropna(subset=['lat_dec', 'lon_dec'])
-    return df_validos.groupby('Clúster').agg({
+    return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('Clúster').agg({
         'lat_dec': 'first', 'lon_dec': 'first', 'POZO': lambda x: ', '.join(x.astype(str))
     }).reset_index()
 
-st.title("🚜 Navegación por Carretera: Rubiales & Caño Sur")
+st.title("🚜 Planificador de Movilización con Enrutamiento Vial")
 
 try:
     df_maestro = cargar_base_coordenadas("Coordenadas Rubiales.xlsx")
 
-    # Entrada de ruta en la barra lateral
-    st.sidebar.header("Plan de Movilización")
-    ruta_input = st.sidebar.text_area("Pega aquí los Clústeres:", placeholder="RB-162\nRB-119")
+    st.sidebar.header("Ruta de Operación")
+    ruta_input = st.sidebar.text_area("Pega los Clústeres aquí:", placeholder="RB-162\nRB-119")
     nombres_ruta = [n.strip().upper() for n in re.split(r'[\n,]+', ruta_input) if n.strip()]
 
     puntos_ruta = []
     for nombre in nombres_ruta:
         match = df_maestro[df_maestro['Clúster'].astype(str).str.upper() == nombre]
         if not match.empty:
-            puntos_ruta.append({'nombre': nombre, 'lat': match.iloc[0]['lat_dec'], 'lon': match.iloc[0]['lon_dec'], 'pozos': match.iloc[0]['POZO']})
+            puntos_ruta.append({
+                'nombre': nombre, 
+                'lat': match.iloc[0]['lat_dec'], 
+                'lon': match.iloc[0]['lon_dec'], 
+                'pozos': match.iloc[0]['POZO']
+            })
 
-    # Construcción del Mapa
+    # Centro del mapa
     m = folium.Map(location=[df_maestro['lat_dec'].mean(), df_maestro['lon_dec'].mean()], zoom_start=12, tiles="OpenStreetMap")
 
     if puntos_ruta:
-        # LLAMADA AL MOTOR DE RUTAS
         geometria_carretera = obtener_ruta_real(puntos_ruta)
         
         if geometria_carretera:
-            # Dibujar la ruta siguiendo las vías
-            folium.PolyLine(geometria_carretera, color="#1E8449", weight=6, opacity=0.8).add_to(m)
+            # Dibujar la ruta principal por carretera
+            folium.PolyLine(geometria_carretera, color="#1E8449", weight=6, opacity=0.85).add_to(m)
+            
+            # MEJORA: Conectar los iconos con el punto más cercano de la carretera (Líneas de acceso)
+            inicio_ruta = geometria_carretera[0]
+            fin_ruta = geometria_carretera[-1]
+            
+            # Línea punteada desde el pozo de inicio al inicio de la vía
+            folium.PolyLine([[puntos_ruta[0]['lat'], puntos_ruta[0]['lon']], inicio_ruta], 
+                            color="#1E8449", weight=2, dash_array='5', opacity=0.6).add_to(m)
+            
+            # Línea punteada desde el último pozo al final de la vía
+            folium.PolyLine([[puntos_ruta[-1]['lat'], puntos_ruta[-1]['lon']], fin_ruta], 
+                            color="#1E8449", weight=2, dash_array='5', opacity=0.6).add_to(m)
         else:
-            # Respaldo: Línea recta si falla el servidor o no hay vía mapeada
-            coords_recta = [[p['lat'], p['lon']] for p in puntos_ruta]
-            folium.PolyLine(coords_recta, color="red", weight=4, dash_array='10', opacity=0.6).add_to(m)
+            # Respaldo si no hay vía mapeada
+            folium.PolyLine([[p['lat'], p['lon']] for p in puntos_ruta], color="red", weight=3, dash_array='10').add_to(m)
 
-        # Marcadores
+        # Colocar marcadores en la ubicación EXACTA del clúster
         for i, p in enumerate(puntos_ruta):
             color = 'green' if i == 0 else ('red' if i == len(puntos_ruta)-1 else 'blue')
             folium.Marker(
                 location=[p['lat'], p['lon']],
-                popup=f"<b>{p['nombre']}</b>",
+                popup=folium.Popup(f"<b>{p['nombre']}</b><br>Pozos: {p['pozos']}", max_width=200),
                 icon=folium.Icon(color=color, icon='truck', prefix='fa')
             ).add_to(m)
             
-        st.success("Ruta calculada siguiendo la infraestructura vial disponible.")
+        st.success("Visualizando ruta con accesos a pozos.")
 
     st_folium(m, width=1100, height=600, returned_objects=[])
 
