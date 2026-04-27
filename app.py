@@ -71,4 +71,63 @@ try:
             lon = match.iloc[0]['lon_dec']
             
             # Verificación final de que la coordenada sea un número válido
-            if pd
+            if pd.notna(lat) and pd.notna(lon):
+                puntos_ruta.append({
+                    'nombre': nombre,
+                    'lat': lat,
+                    'lon': lon,
+                    'pozos': match.iloc[0]['POZO']
+                })
+        else:
+            if nombre: st.sidebar.warning(f"⚠️ Clúster '{nombre}' no encontrado.")
+
+    # 3. CONSTRUCCIÓN DEL MAPA
+    # Centramos en el promedio de la base completa
+    centro = [df_maestro['lat_dec'].mean(), df_maestro['lon_dec'].mean()]
+    m = folium.Map(location=centro, zoom_start=12, tiles="CartoDB positron")
+
+    # Dibujar todos los clústeres disponibles como puntos de referencia
+    for _, row in df_maestro.iterrows():
+        folium.CircleMarker(
+            location=[row['lat_dec'], row['lon_dec']],
+            radius=2,
+            color="#AAB7B8",
+            fill=True,
+            opacity=0.5
+        ).add_to(m)
+
+    # Dibujar la ruta si hay puntos válidos
+    if puntos_ruta:
+        coords_linea = [[p['lat'], p['lon']] for p in puntos_ruta]
+        
+        # Línea de trayectoria
+        folium.PolyLine(
+            coords_linea, 
+            color="#28B463", 
+            weight=4, 
+            opacity=0.8
+        ).add_to(m)
+
+        # Marcadores de la ruta
+        for i, p in enumerate(puntos_ruta):
+            # Color: Verde para inicio, Rojo para fin, Azul para intermedios
+            color_icon = 'green' if i == 0 else ('red' if i == len(puntos_ruta)-1 else 'blue')
+            prefix = "INICIO" if i == 0 else ("DESTINO" if i == len(puntos_ruta)-1 else f"Punto {i}")
+            
+            folium.Marker(
+                location=[p['lat'], p['lon']],
+                popup=folium.Popup(f"<b>{prefix}: {p['nombre']}</b><br>Pozos: {p['pozos']}", max_width=250),
+                tooltip=f"{prefix}: {p['nombre']}",
+                icon=folium.Icon(color=color_icon, icon='info-sign')
+            ).add_to(m)
+
+        st.success(f"Ruta trazada: {len(puntos_ruta)} puntos identificados.")
+    else:
+        st.info("Ingresa nombres de clústeres en la barra lateral para generar la ruta.")
+
+    # Mostrar el mapa final
+    st_folium(m, width=1100, height=600, returned_objects=[])
+
+except Exception as e:
+    st.error(f"Error en la aplicación: {e}")
+    st.info("Revisa que el archivo 'Coordenadas Rubiales.xlsx' esté en la raíz de GitHub.")
