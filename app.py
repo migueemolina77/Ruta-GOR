@@ -1,47 +1,56 @@
+import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
 import re
 
-# Función para convertir el formato "3° 49' 6.105" N" a decimal
+# Configuración de página para evitar la pantalla negra
+st.set_page_config(layout="wide")
+
 def dms_to_decimal(dms_str):
-    if pd.isna(dms_str): return None
-    # Extraer números usando expresiones regulares
-    parts = re.findall(r"[-+]?\d*\.\d+|\d+", dms_str)
-    deg, minu, sec = map(float, parts)
-    decimal = deg + (minu / 60) + (sec / 3600)
-    # Si es Sur o Oeste (W), el valor es negativo
-    if 'S' in dms_str or 'W' in dms_str:
-        decimal *= -1
-    return decimal
+    try:
+        if pd.isna(dms_str): return None
+        # Limpieza para el formato de tu tabla: 3° 49' 6.105" N
+        parts = re.findall(r"[-+]?\d*\.\d+|\d+", str(dms_str))
+        deg, minu, sec = map(float, parts)
+        decimal = deg + (minu / 60) + (sec / 3600)
+        if 'S' in str(dms_str) or 'W' in str(dms_str):
+            decimal *= -1
+        return decimal
+    except:
+        return None
 
-# 1. Cargar el archivo (ajusta el nombre a tu archivo real)
-# df = pd.read_excel("coordenadas_pozos.xlsx")
+st.title("📍 Logística de Pozos: Rubiales & Caño Sur")
 
-# 2. Procesar las columnas de tu imagen
-# Supongamos que las columnas se llaman 'Latitud' y 'Longitud'
-# df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
-# df['lon_dec'] = df['Longitud'].apply(dms_to_decimal)
-
-# Visualización base
-def generar_mapa(dataframe):
-    # Centrar en Rubiales
-    m = folium.Map(location=[3.8, -71.5], zoom_start=11, tiles="CartoDB positron")
+# Intenta cargar el archivo
+try:
+    # Cambia 'coordenadas.xlsx' por el nombre de tu archivo en GitHub
+    df = pd.read_excel("coordenadas.xlsx") 
     
-    for _, row in dataframe.iterrows():
-        # Lógica de notificación (puedes añadir condiciones según el nombre del cluster)
-        color_icono = 'blue'
-        popup_text = f"Pozo: {row['POZO']}<br>Cluster: {row['Clúster']}"
-        
-        if "restringido" in str(row.get('Notificacion', '')).lower():
-            color_icono = 'orange'
-            popup_text += f"<br>⚠️ {row['Notificacion']}"
-
-        folium.Marker(
-            location=[row['lat_dec'], row['lon_dec']],
-            popup=folium.Popup(popup_text, max_width=300),
-            tooltip=row['POZO'],
-            icon=folium.Icon(color=color_icono, icon='tint')
-        ).add_to(m)
+    # Aplicamos la conversión a tus columnas de la imagen
+    df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
+    df['lon_dec'] = df['Longitud'].apply(dms_to_decimal)
     
-    return m
+    # Filtramos filas sin coordenadas para evitar que el mapa falle
+    df = df.dropna(subset=['lat_dec', 'lon_dec'])
+
+    if not df.empty:
+        # Crear mapa centrado en el promedio de tus pozos
+        m = folium.Map(location=[df['lat_dec'].mean(), df['lon_dec'].mean()], zoom_start=11)
+
+        for _, row in df.iterrows():
+            folium.Marker(
+                location=[row['lat_dec'], row['lon_dec']],
+                popup=f"Pozo: {row['POZO']} - Cluster: {row['Clúster']}",
+                tooltip=row['POZO'],
+                icon=folium.Icon(color='blue', icon='info-sign')
+            ).add_to(m)
+
+        # Renderizar mapa
+        st_folium(m, width=1000, height=600)
+    else:
+        st.error("No se encontraron coordenadas válidas en el archivo.")
+
+except Exception as e:
+    st.error(f"Error al cargar datos: {e}")
+    st.info("Asegúrate de que el archivo Excel esté en la raíz de tu repositorio de GitHub.")
