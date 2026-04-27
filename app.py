@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 import re
 import requests
 
-st.set_page_config(page_title="Logística Rubiales - Rutas Reales", layout="wide")
+st.set_page_config(page_title="Logística Rubiales - Activos", layout="wide")
 
 # 1. Conversión DMS a Decimal
 def dms_to_decimal(dms_str):
@@ -45,13 +45,13 @@ def cargar_base_coordenadas(file_path):
         'lat_dec': 'first', 'lon_dec': 'first', 'POZO': lambda x: ', '.join(x.astype(str))
     }).reset_index()
 
-st.title("🚜 Planificador de Movilización con Enrutamiento Vial")
+st.title("🛢️ Ubicación de Activos y Rutas: Rubiales")
 
 try:
     df_maestro = cargar_base_coordenadas("Coordenadas Rubiales.xlsx")
 
-    st.sidebar.header("Ruta de Operación")
-    ruta_input = st.sidebar.text_area("Pega los Clústeres aquí:", placeholder="RB-162\nRB-119")
+    st.sidebar.header("Plan de Movilización")
+    ruta_input = st.sidebar.text_area("Lista de Clústeres (Destinos):", placeholder="RB-162\nRB-119")
     nombres_ruta = [n.strip().upper() for n in re.split(r'[\n,]+', ruta_input) if n.strip()]
 
     puntos_ruta = []
@@ -65,43 +65,42 @@ try:
                 'pozos': match.iloc[0]['POZO']
             })
 
-    # Centro del mapa
+    # Centro del mapa basado en los datos
     m = folium.Map(location=[df_maestro['lat_dec'].mean(), df_maestro['lon_dec'].mean()], zoom_start=12, tiles="OpenStreetMap")
 
     if puntos_ruta:
         geometria_carretera = obtener_ruta_real(puntos_ruta)
         
         if geometria_carretera:
-            # Dibujar la ruta principal por carretera
-            folium.PolyLine(geometria_carretera, color="#1E8449", weight=6, opacity=0.85).add_to(m)
+            # Dibujar la ruta principal
+            folium.PolyLine(geometria_carretera, color="#2E86C1", weight=5, opacity=0.8).add_to(m)
             
-            # MEJORA: Conectar los iconos con el punto más cercano de la carretera (Líneas de acceso)
-            inicio_ruta = geometria_carretera[0]
-            fin_ruta = geometria_carretera[-1]
+            # Dibujar líneas de acceso (antenas) desde los extremos de la vía hacia los cabezales exactos
+            folium.PolyLine([[puntos_ruta[0]['lat'], puntos_ruta[0]['lon']], geometria_carretera[0]], 
+                            color="#2E86C1", weight=2, dash_array='5', opacity=0.7).add_to(m)
             
-            # Línea punteada desde el pozo de inicio al inicio de la vía
-            folium.PolyLine([[puntos_ruta[0]['lat'], puntos_ruta[0]['lon']], inicio_ruta], 
-                            color="#1E8449", weight=2, dash_array='5', opacity=0.6).add_to(m)
-            
-            # Línea punteada desde el último pozo al final de la vía
-            folium.PolyLine([[puntos_ruta[-1]['lat'], puntos_ruta[-1]['lon']], fin_ruta], 
-                            color="#1E8449", weight=2, dash_array='5', opacity=0.6).add_to(m)
+            folium.PolyLine([[puntos_ruta[-1]['lat'], puntos_ruta[-1]['lon']], geometria_carretera[-1]], 
+                            color="#2E86C1", weight=2, dash_array='5', opacity=0.7).add_to(m)
         else:
-            # Respaldo si no hay vía mapeada
-            folium.PolyLine([[p['lat'], p['lon']] for p in puntos_ruta], color="red", weight=3, dash_array='10').add_to(m)
+            # Respaldo en línea recta
+            folium.PolyLine([[p['lat'], p['lon']] for p in puntos_ruta], color="#E74C3C", weight=3, dash_array='10').add_to(m)
 
-        # Colocar marcadores en la ubicación EXACTA del clúster
+        # Colocar marcadores con icono de pozo en la ubicación real del Clúster
         for i, p in enumerate(puntos_ruta):
-            color = 'green' if i == 0 else ('red' if i == len(puntos_ruta)-1 else 'blue')
+            # Identificar inicio y fin con colores, pero con el mismo icono de pozo
+            color_well = 'darkblue' if i == 0 else ('darkred' if i == len(puntos_ruta)-1 else 'cadetblue')
+            label_tipo = "ORIGEN" if i == 0 else ("DESTINO" if i == len(puntos_ruta)-1 else "PUNTO INTERMEDIO")
+            
             folium.Marker(
                 location=[p['lat'], p['lon']],
-                popup=folium.Popup(f"<b>{p['nombre']}</b><br>Pozos: {p['pozos']}", max_width=200),
-                icon=folium.Icon(color=color, icon='truck', prefix='fa')
+                popup=folium.Popup(f"<b>{label_tipo}: {p['nombre']}</b><br>Pozos: {p['pozos']}", max_width=250),
+                tooltip=f"Cabezal {p['nombre']}",
+                icon=folium.Icon(color=color_well, icon='oil-well', prefix='fa')
             ).add_to(m)
             
-        st.success("Visualizando ruta con accesos a pozos.")
+        st.success(f"Logística trazada hacia {len(puntos_ruta)} cabezales de pozo.")
 
     st_folium(m, width=1100, height=600, returned_objects=[])
 
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Error en la visualización: {e}")
