@@ -39,10 +39,14 @@ def obtener_tramo_real(punto_a, punto_b):
 
 @st.cache_data
 def cargar_base_coordenadas(file_path):
+    # Se mantiene header=6 asumiendo que los títulos están en la fila 7
     df = pd.read_excel(file_path, header=6)
+    # Limpieza de nombres de columnas para evitar errores de espacios
     df.columns = df.columns.astype(str).str.strip()
+    
     df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
     df['lon_dec'] = df['Longitud'].apply(dms_to_decimal)
+    
     return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('Clúster').agg({
         'lat_dec': 'first', 'lon_dec': 'first', 'POZO': lambda x: ', '.join(x.astype(str))
     }).reset_index()
@@ -52,7 +56,8 @@ st.title("🚜 Plan de Movilización Numerado")
 colores_tramos = ['#E74C3C', '#2ECC71', '#3498DB', '#F1C40F', '#9B59B6', '#E67E22']
 
 try:
-    df_maestro = cargar_base_coordenadas("Coordenadas Rubiales.xlsx")
+    # --- CAMBIO REALIZADO AQUÍ ABAJO ---
+    df_maestro = cargar_base_coordenadas("COORDENADAS GOR.xlsx")
 
     st.sidebar.header("Orden de Movilización")
     ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:", placeholder="RB-162\nRB-269\nRB-119")
@@ -63,13 +68,14 @@ try:
         match = df_maestro[df_maestro['Clúster'].astype(str).str.upper() == nombre]
         if not match.empty:
             puntos_ruta.append({
-                'orden': i + 1, # Asignamos el número de orden
+                'orden': i + 1,
                 'nombre': nombre, 
                 'lat': match.iloc[0]['lat_dec'], 
                 'lon': match.iloc[0]['lon_dec'], 
                 'pozos': match.iloc[0]['POZO']
             })
 
+    # Centro del mapa
     m = folium.Map(location=[df_maestro['lat_dec'].mean(), df_maestro['lon_dec'].mean()], zoom_start=12)
 
     if len(puntos_ruta) >= 2:
@@ -95,16 +101,13 @@ try:
         st.sidebar.table(resumen_ruta)
         st.sidebar.metric("Distancia Total de Campaña", f"{total_km:.2f} Km")
 
-    # Marcadores con número de orden
     for p in puntos_ruta:
-        # 1. Marcador del cabezal de pozo
         folium.Marker(
             location=[p['lat'], p['lon']],
             popup=f"<b>({p['orden']}) Clúster: {p['nombre']}</b><br>Pozos: {p['pozos']}",
             icon=folium.Icon(color='black', icon='oil-well', prefix='fa')
         ).add_to(m)
 
-        # 2. Etiqueta flotante con el número (para verlo sin hacer clic)
         folium.map.Marker(
             [p['lat'], p['lon']],
             icon=DivIcon(
