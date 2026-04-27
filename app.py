@@ -8,7 +8,7 @@ from folium.features import DivIcon
 
 st.set_page_config(page_title="Logística GOR - Orden de Movilización", layout="wide")
 
-# 1. Diccionario de Normalización (Campo -> Excel)
+# 1. Diccionario de Normalización (Campo -> Búsqueda)
 MAPEO_CAMPOS = {
     'RB': 'RUBIALES',
     'CASE': 'CAÑO SUR ESTE',
@@ -18,7 +18,6 @@ MAPEO_CAMPOS = {
 def normalizar_nombre(texto):
     if not texto: return ""
     texto = str(texto).upper().strip()
-    # Separa el prefijo del número/nombre (ej: CASE-027 -> CASE, 027)
     match = re.match(r"([A-Z]+)[-\s]*([A-Z0-9\s\-]+)", texto)
     if match:
         prefijo, resto = match.group(1), match.group(2)
@@ -26,7 +25,7 @@ def normalizar_nombre(texto):
         return f"{prefijo_real} {resto}".strip()
     return texto
 
-# 2. Función para obtener rutas reales (OSRM)
+# 2. Función para rutas reales (OSRM)
 def obtener_tramo_real(punto_a, punto_b):
     url = f"http://router.project-osrm.org/route/v1/driving/{punto_a['lon']},{punto_a['lat']};{punto_b['lon']},{punto_b['lat']}?overview=full&geometries=geojson"
     try:
@@ -43,105 +42,88 @@ def obtener_tramo_real(punto_a, punto_b):
 
 @st.cache_data
 def cargar_base_coordenadas(file_path):
-    # Leemos el archivo (Header en fila 0 para COORDENADAS GOR.xlsx)
+    # Intentamos cargar sin saltar filas primero (ajuste dinámico de header)
     df = pd.read_excel(file_path)
-    df.columns = df.columns.astype(str).str.strip()
     
-    # Normalizamos la columna CLUSTER del Excel para facilitar la búsqueda
+    # LIMPIEZA MAESTRA DE COLUMNAS:
+    # Quitamos espacios, tildes y ponemos todo en MAYÚSCULAS
+    df.columns = df.columns.astype(str).str.strip().str.upper().str.replace('Ú', 'U').str.replace('Ó', 'O')
+    
+    # Verificación de columnas mínimas necesarias
+    columnas_requeridas = ['CLUSTER', 'LATITUD', 'LONGITUD', 'POZO']
+    for col in columnas_requeridas:
+        if col not in df.columns:
+            st.error(f"⚠️ No se encontró la columna '{col}'. Las columnas detectadas son: {list(df.columns)}")
+            st.stop()
+
+    # Normalizamos la columna CLUSTER del Excel
     df['CLUSTER_NORM'] = df['CLUSTER'].apply(normalizar_nombre)
     
-    # Convertimos coordenadas a números (asumiendo formato decimal del último archivo)
-    df['lat_dec'] = pd.to_numeric(df['Latitud'], errors='coerce')
-    df['lon_dec'] = pd.to_numeric(df['Longitud'], errors='coerce')
+    # Convertimos coordenadas a números (manejo de errores para celdas vacías)
+    df['LAT_DEC'] = pd.to_numeric(df['LATITUD'], errors='coerce')
+    df['LON_DEC'] = pd.to_numeric(df['LONGITUD'], errors='coerce')
     
-    # Agrupamos por CLUSTER para evitar puntos duplicados en el mapa
-    return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('CLUSTER_NORM').agg({
-        'lat_dec': 'first', 
-        'lon_dec': 'first', 
+    return df.dropna(subset=['LAT_DEC', 'LON_DEC']).groupby('CLUSTER_NORM').agg({
+        'LAT_DEC': 'first', 
+        'LON_DEC': 'first', 
         'POZO': lambda x: ', '.join(x.astype(str).unique()),
         'CLUSTER': 'first' 
     }).reset_index()
 
 st.title("🚜 Plan de Movilización Numerado - GOR")
 
-colores_tramos = ['#E74C3C', '#2ECC71', '#3498DB', '#F1C40F', '#9B59B6', '#E67E22']
-
 try:
-    # IMPORTANTE: El nombre aquí debe ser EXACTO al de GitHub (minúsculas)
-    # Si tu archivo se llama 'coordenadas.xlsx', cámbialo abajo:
+    # Asegúrate de que el nombre sea el que tienes en GitHub
     df_maestro = cargar_base_coordenadas("coordenadas.xlsx")
 
     st.sidebar.header("Orden de Movilización")
-    st.sidebar.info("Puedes usar: CASE-027, RB-162, MITO 1")
-    
-    ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:")
+    ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:", placeholder="RB-162\nCASE-027")
     nombres_solicitados = [normalizar_nombre(n) for n in re.split(r'[\n,]+', ruta_input) if n.strip()]
 
     puntos_ruta = []
     for i, nombre_buscado in enumerate(nombres_solicitados):
-        # Búsqueda flexible (si el nombre está contenido en el registro)
+        # Búsqueda flexible
         match = df_maestro[df_maestro['CLUSTER_NORM'].str.contains(nombre_buscado, na=False)]
         
         if not match.empty:
             puntos_ruta.append({
                 'orden': i + 1,
                 'nombre': match.iloc[0]['CLUSTER'], 
-                'lat': match.iloc[0]['lat_dec'], 
-                'lon': match.iloc[0]['lon_dec'], 
+                'lat': match.iloc[0]['LAT_DEC'], 
+                'lon': match.iloc[0]['LON_DEC'], 
                 'pozos': match.iloc[0]['POZO']
             })
         else:
             if nombre_buscado:
                 st.sidebar.warning(f"⚠️ No encontrado: {nombre_buscado}")
 
-    # Centro del mapa en GOR / Rubiales
+    # Mapa base
     m = folium.Map(location=[3.74, -71.75], zoom_start=11, tiles="cartodbpositron")
 
     if len(puntos_ruta) >= 2:
-        resumen_ruta = []
         total_km = 0
-        
         for i in range(len(puntos_ruta) - 1):
             p1, p2 = puntos_ruta[i], puntos_ruta[i+1]
             geometria, km = obtener_tramo_real(p1, p2)
-            
             if geometria:
-                color_asignado = colores_tramos[i % len(colores_tramos)]
-                folium.PolyLine(geometria, color=color_asignado, weight=7, opacity=0.8).add_to(m)
-                
+                folium.PolyLine(geometria, color='#2E86C1', weight=6, opacity=0.8).add_to(m)
                 total_km += km
-                resumen_ruta.append({
-                    "Orden": f"{p1['orden']} ➡️ {p2['orden']}",
-                    "Trayecto": f"{p1['nombre']} a {p2['nombre']}",
-                    "KM": round(km, 2)
-                })
 
-        st.sidebar.subheader("Itinerario Detallado")
-        st.sidebar.table(resumen_ruta)
-        st.sidebar.metric("Distancia Total de Campaña", f"{total_km:.2f} Km")
+        st.sidebar.metric("Distancia Total Estimada", f"{total_km:.2f} Km")
 
-    # Dibujar Marcadores Numerados
+    # Marcadores
     for p in puntos_ruta:
         folium.Marker(
             location=[p['lat'], p['lon']],
-            popup=f"<b>({p['orden']}) Clúster: {p['nombre']}</b><br>Pozos: {p['pozos']}",
-            icon=folium.Icon(color='black', icon='oil-well', prefix='fa')
-        ).add_to(m)
-
-        folium.map.Marker(
-            [p['lat'], p['lon']],
             icon=DivIcon(
-                icon_size=(150,36),
-                icon_anchor=(7,20),
-                html=f'''<div style="font-size: 14pt; color: white; background-color: black; 
-                        border-radius: 50%; width: 30px; height: 30px; display: flex; 
-                        justify-content: center; align-items: center; border: 2px solid white; 
-                        font-weight: bold;">{p["orden"]}</div>''',
-            )
+                icon_size=(35,35),
+                icon_anchor=(17,17),
+                html=f'<div style="font-size: 13pt; color: white; background-color: #1B2631; border-radius: 50%; width: 35px; height: 35px; display: flex; justify-content: center; align-items: center; border: 2px solid white; font-weight: bold;">{p["orden"]}</div>',
+            ),
+            popup=f"<b>Clúster:</b> {p['nombre']}<br><b>Pozos:</b> {p['pozos']}"
         ).add_to(m)
 
     st_folium(m, width=1100, height=600, returned_objects=[])
 
 except Exception as e:
     st.error(f"Error: {e}")
-    st.info("Asegúrate de que el archivo de Excel esté en la raíz de tu GitHub y el nombre coincida exactamente.")
