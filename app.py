@@ -1,98 +1,123 @@
 import streamlit as st
 import pandas as pd
+import folium
+from streamlit_folium import st_folium
 import re
+import requests
+from folium.features import DivIcon
 
-# 1. Configuración de la página
-st.set_page_config(page_title="QAQC Registros de Producción - Rubiales", layout="wide")
+st.set_page_config(page_title="Logística Rubiales - Orden de Movilización", layout="wide")
 
-# 2. Diccionario de Mapeo (Normalización de nombres de campo a OpenWells)
-MAPEO_POZOS = {
-    'RB': 'RUBIALES',
-    'CASE': 'CAÑO SUR ESTE',
-    'CSE': 'CAÑO SUR ESTE'
-}
+# 1. Conversión DMS a Decimal
+def dms_to_decimal(dms_str):
+    try:
+        if pd.isna(dms_str) or str(dms_str).strip() == "": return None
+        parts = re.findall(r"[-+]?\d*\.\d+|\d+", str(dms_str))
+        if len(parts) < 3: return None
+        deg, minu, sec = map(float, parts)
+        decimal = deg + (minu / 60) + (sec / 3600)
+        if any(char in str(dms_str).upper() for char in ['S', 'W', 'O']):
+            decimal *= -1
+        return decimal
+    except:
+        return None
 
-# 3. Función para normalizar la entrada del usuario
-def normalizar_nombre_pozo(entrada_usuario):
-    if not entrada_usuario:
-        return ""
-    
-    # Convertir a mayúsculas y quitar espacios/puntos extra
-    nombre = entrada_usuario.upper().strip().replace(".", "")
-    
-    # Expresión regular para separar prefijo de número (ej: RB-1065H o RB1065H)
-    match = re.match(r"([A-Z]+)[-\s]*(\d+[A-Z]*)", nombre)
-    
-    if match:
-        prefijo = match.group(1)
-        numero = match.group(2)
-        
-        # Traducir prefijo (ej: RB -> RUBIALES)
-        prefijo_oficial = MAPEO_POZOS.get(prefijo, prefijo)
-        return f"{prefijo_oficial} {numero}"
-    
-    return nombre
+# 2. Función para obtener tramos reales
+def obtener_tramo_real(punto_a, punto_b):
+    url = f"http://router.project-osrm.org/route/v1/driving/{punto_a['lon']},{punto_a['lat']};{punto_b['lon']},{punto_b['lat']}?overview=full&geometries=geojson"
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if data['code'] == 'Ok':
+            ruta = data['routes'][0]
+            geometria = [[coord[1], coord[0]] for coord in ruta['geometry']['coordinates']]
+            distancia_km = ruta['distance'] / 1000
+            return geometria, distancia_km
+    except:
+        pass
+    return [], 0
 
-# 4. Carga y limpieza de base de datos
 @st.cache_data
-def cargar_datos(archivo):
-    # skipinitialspace elimina espacios después de las comas en el CSV
-    df = pd.read_csv(archivo, skipinitialspace=True)
+def cargar_base_coordenadas(file_path):
+    # Se mantiene header=6 asumiendo que los títulos están en la fila 7
+    df = pd.read_excel(file_path, header=6)
+    # Limpieza de nombres de columnas para evitar errores de espacios
+    df.columns = df.columns.astype(str).str.strip()
     
-    # Limpiar espacios en blanco en las columnas críticas
-    for col in ['POZO', 'CLUSTER', 'GERENCIA']:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-            
-    return df
-
-# --- INTERFAZ DE USUARIO ---
-st.title("🚀 Visualizador de RAW DATA - QAQC")
-st.subheader("Coordinación de Subsuelo - Rubiales")
-
-# Sidebar para cargar el archivo de coordenadas/OpenWells
-with st.sidebar:
-    st.header("Configuración")
-    archivo_subido = st.file_uploader("Cargar base de datos (CSV)", type=["csv"])
-
-if archivo_subido:
-    df_base = cargar_datos(archivo_subido)
+    df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
+    df['lon_dec'] = df['Longitud'].apply(dms_to_decimal)
     
-    # Buscador dinámico
-    st.info("Puedes buscar como en campo (ej: RB-1065H) o como en OpenWells (RUBIALES 1065H)")
-    busqueda = st.text_input("Ingrese el nombre del pozo a consultar:")
-    
-    if busqueda:
-        nombre_normalizado = normalizar_nombre_pozo(busqueda)
-        st.write(f"🔍 Buscando oficialmente como: **{nombre_normalizado}**")
+    return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('Clúster').agg({
+        'lat_dec': 'first', 'lon_dec': 'first', 'POZO': lambda x: ', '.join(x.astype(str))
+    }).reset_index()
+
+st.title("🚜 Plan de Movilización Numerado")
+
+colores_tramos = ['#E74C3C', '#2ECC71', '#3498DB', '#F1C40F', '#9B59B6', '#E67E22']
+
+try:
+    # --- CAMBIO REALIZADO AQUÍ ABAJO ---
+    df_maestro = cargar_base_coordenadas("COORDENADAS GOR.xlsx")
+
+    st.sidebar.header("Orden de Movilización")
+    ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:", placeholder="RB-162\nRB-269\nRB-119")
+    nombres_ruta = [n.strip().upper() for n in re.split(r'[\n,]+', ruta_input) if n.strip()]
+
+    puntos_ruta = []
+    for i, nombre in enumerate(nombres_ruta):
+        match = df_maestro[df_maestro['Clúster'].astype(str).str.upper() == nombre]
+        if not match.empty:
+            puntos_ruta.append({
+                'orden': i + 1,
+                'nombre': nombre, 
+                'lat': match.iloc[0]['lat_dec'], 
+                'lon': match.iloc[0]['lon_dec'], 
+                'pozos': match.iloc[0]['POZO']
+            })
+
+    # Centro del mapa
+    m = folium.Map(location=[df_maestro['lat_dec'].mean(), df_maestro['lon_dec'].mean()], zoom_start=12)
+
+    if len(puntos_ruta) >= 2:
+        resumen_ruta = []
+        total_km = 0
         
-        # Filtrado en el DataFrame
-        resultado = df_base[df_base['POZO'] == nombre_normalizado]
-        
-        if not resultado.empty:
-            # Mostrar métricas rápidas
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Pozo", resultado['POZO'].values[0])
-            with col2:
-                st.metric("Cluster", resultado['CLUSTER'].values[0])
-            with col3:
-                st.metric("Ubicación", f"{resultado['Latitud'].values[0]}, {resultado['Longitud'].values[0]}")
+        for i in range(len(puntos_ruta) - 1):
+            p1, p2 = puntos_ruta[i], puntos_ruta[i+1]
+            geometria, km = obtener_tramo_real(p1, p2)
             
-            # Espacio para el gráfico de registros (Raw Data)
-            st.divider()
-            st.subheader("Visualización de Registros")
-            st.warning("Aquí se integrará la lógica de graficación de archivos .DLIS / Raw Data")
-            
-            # Mostrar tabla de datos completa del pozo
-            st.dataframe(resultado)
-        else:
-            st.error(f"No se encontró el pozo '{nombre_normalizado}' en la base de datos.")
-            st.info("Verifica que el nombre en el Excel coincida con el formato oficial.")
+            if geometria:
+                color_asignado = colores_tramos[i % len(colores_tramos)]
+                folium.PolyLine(geometria, color=color_asignado, weight=7, opacity=0.8).add_to(m)
+                
+                total_km += km
+                resumen_ruta.append({
+                    "Orden": f"{p1['orden']} ➡️ {p2['orden']}",
+                    "Trayecto": f"{p1['nombre']} a {p2['nombre']}",
+                    "KM": round(km, 2)
+                })
 
-else:
-    st.write("👈 Por favor, carga el archivo CSV de coordenadas en la barra lateral para iniciar.")
+        st.sidebar.subheader("Itinerario Detallado")
+        st.sidebar.table(resumen_ruta)
+        st.sidebar.metric("Distancia Total de Campaña", f"{total_km:.2f} Km")
 
-# Pie de página técnico
-st.sidebar.markdown("---")
-st.sidebar.caption("Desarrollado para la Implementación de visualizadores de RAW DATA.")
+    for p in puntos_ruta:
+        folium.Marker(
+            location=[p['lat'], p['lon']],
+            popup=f"<b>({p['orden']}) Clúster: {p['nombre']}</b><br>Pozos: {p['pozos']}",
+            icon=folium.Icon(color='black', icon='oil-well', prefix='fa')
+        ).add_to(m)
+
+        folium.map.Marker(
+            [p['lat'], p['lon']],
+            icon=DivIcon(
+                icon_size=(150,36),
+                icon_anchor=(7,20),
+                html=f'<div style="font-size: 14pt; color: white; background-color: black; border-radius: 50%; width: 30px; height: 30px; display: flex; justify-content: center; align-items: center; border: 2px solid white; font-weight: bold;">{p["orden"]}</div>',
+            )
+        ).add_to(m)
+
+    st_folium(m, width=1100, height=600, returned_objects=[])
+
+except Exception as e:
+    st.error(f"Error: {e}")
