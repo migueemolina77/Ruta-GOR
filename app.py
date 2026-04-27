@@ -4,8 +4,9 @@ import folium
 from streamlit_folium import st_folium
 import re
 import requests
+from folium.features import DivIcon
 
-st.set_page_config(page_title="Logística Rubiales - Colores por Tramo", layout="wide")
+st.set_page_config(page_title="Logística Rubiales - Orden de Movilización", layout="wide")
 
 # 1. Conversión DMS a Decimal
 def dms_to_decimal(dms_str):
@@ -21,7 +22,7 @@ def dms_to_decimal(dms_str):
     except:
         return None
 
-# 2. Función para obtener geometría y DISTANCIA de cada tramo independiente
+# 2. Función para obtener tramos reales
 def obtener_tramo_real(punto_a, punto_b):
     url = f"http://router.project-osrm.org/route/v1/driving/{punto_a['lon']},{punto_a['lat']};{punto_b['lon']},{punto_b['lat']}?overview=full&geometries=geojson"
     try:
@@ -46,69 +47,74 @@ def cargar_base_coordenadas(file_path):
         'lat_dec': 'first', 'lon_dec': 'first', 'POZO': lambda x: ', '.join(x.astype(str))
     }).reset_index()
 
-st.title("🚜 Planificador: Tramos por Colores y KM")
+st.title("🚜 Plan de Movilización Numerado")
 
-# Paleta de colores vibrantes para distinguir tramos
 colores_tramos = ['#E74C3C', '#2ECC71', '#3498DB', '#F1C40F', '#9B59B6', '#E67E22']
 
 try:
     df_maestro = cargar_base_coordenadas("Coordenadas Rubiales.xlsx")
 
-    st.sidebar.header("Itinerario de Movilización")
-    ruta_input = st.sidebar.text_area("Lista de Clústeres:", placeholder="RB-162\nRB-269\nRB-119")
+    st.sidebar.header("Orden de Movilización")
+    ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:", placeholder="RB-162\nRB-269\nRB-119")
     nombres_ruta = [n.strip().upper() for n in re.split(r'[\n,]+', ruta_input) if n.strip()]
 
     puntos_ruta = []
-    for nombre in nombres_ruta:
+    for i, nombre in enumerate(nombres_ruta):
         match = df_maestro[df_maestro['Clúster'].astype(str).str.upper() == nombre]
         if not match.empty:
-            puntos_ruta.append({'nombre': nombre, 'lat': match.iloc[0]['lat_dec'], 'lon': match.iloc[0]['lon_dec'], 'pozos': match.iloc[0]['POZO']})
+            puntos_ruta.append({
+                'orden': i + 1, # Asignamos el número de orden
+                'nombre': nombre, 
+                'lat': match.iloc[0]['lat_dec'], 
+                'lon': match.iloc[0]['lon_dec'], 
+                'pozos': match.iloc[0]['POZO']
+            })
 
-    # Centro inicial del mapa
     m = folium.Map(location=[df_maestro['lat_dec'].mean(), df_maestro['lon_dec'].mean()], zoom_start=12)
 
     if len(puntos_ruta) >= 2:
         resumen_ruta = []
         total_km = 0
         
-        # Bucle para dibujar CADA tramo con un color único
         for i in range(len(puntos_ruta) - 1):
-            p1 = puntos_ruta[i]
-            p2 = puntos_ruta[i+1]
-            
+            p1, p2 = puntos_ruta[i], puntos_ruta[i+1]
             geometria, km = obtener_tramo_real(p1, p2)
             
             if geometria:
                 color_asignado = colores_tramos[i % len(colores_tramos)]
-                
-                # Dibujamos el tramo en el mapa
-                folium.PolyLine(
-                    locations=geometria,
-                    color=color_asignado,
-                    weight=7,
-                    opacity=0.9,
-                    tooltip=f"Tramo {i+1}: {p1['nombre']} -> {p2['nombre']} ({km:.2f} km)"
-                ).add_to(m)
-                
-                # Conexión punteada al cabezal del pozo (opcional para precisión)
-                folium.PolyLine([geometria[-1], [p2['lat'], p2['lon']]], color=color_asignado, weight=2, dash_array='5').add_to(m)
+                folium.PolyLine(geometria, color=color_asignado, weight=7, opacity=0.8).add_to(m)
                 
                 total_km += km
-                resumen_ruta.append({"Tramo": f"{p1['nombre']} ➡️ {p2['nombre']}", "KM": round(km, 2)})
+                resumen_ruta.append({
+                    "Orden": f"{p1['orden']} ➡️ {p2['orden']}",
+                    "Trayecto": f"{p1['nombre']} a {p2['nombre']}",
+                    "KM": round(km, 2)
+                })
 
-        # Mostrar tabla y total en sidebar
+        st.sidebar.subheader("Itinerario Detallado")
         st.sidebar.table(resumen_ruta)
-        st.sidebar.metric("Distancia Total", f"{total_km:.2f} Km")
+        st.sidebar.metric("Distancia Total de Campaña", f"{total_km:.2f} Km")
 
-    # Colocar marcadores de Cabezal (Arbolito) en cada punto
-    for i, p in enumerate(puntos_ruta):
+    # Marcadores con número de orden
+    for p in puntos_ruta:
+        # 1. Marcador del cabezal de pozo
         folium.Marker(
             location=[p['lat'], p['lon']],
-            popup=f"<b>Clúster: {p['nombre']}</b>",
+            popup=f"<b>({p['orden']}) Clúster: {p['nombre']}</b><br>Pozos: {p['pozos']}",
             icon=folium.Icon(color='black', icon='oil-well', prefix='fa')
+        ).add_to(m)
+
+        # 2. Etiqueta flotante con el número (para verlo sin hacer clic)
+        folium.map.Marker(
+            [p['lat'], p['lon']],
+            icon=DivIcon(
+                icon_size=(150,36),
+                icon_anchor=(7,20),
+                html=f'<div style="font-size: 14pt; color: white; background-color: black; border-radius: 50%; width: 30px; height: 30px; display: flex; justify-content: center; align-items: center; border: 2px solid white; font-weight: bold;">{p["orden"]}</div>',
+            )
         ).add_to(m)
 
     st_folium(m, width=1100, height=600, returned_objects=[])
 
 except Exception as e:
-    st.error(f"Error en visualización: {e}")
+    st.error(f"Error: {e}")
