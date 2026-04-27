@@ -44,10 +44,10 @@ def cargar_base_coordenadas(file_path):
     # Limpieza de nombres de columnas para evitar errores de espacios
     df.columns = df.columns.astype(str).str.strip()
     
-    df['lat_dec'] = df['Latitud'].apply(dms_to_decimal)
-    df['lon_dec'] = df['Longitud'].apply(dms_to_decimal)
+    df['lat_dec'] = df['LATITUD'].apply(dms_to_decimal)
+    df['lon_dec'] = df['LONGITUD'].apply(dms_to_decimal)
     
-    return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('Clúster').agg({
+    return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('CLUSTER').agg({
         'lat_dec': 'first', 'lon_dec': 'first', 'POZO': lambda x: ', '.join(x.astype(str))
     }).reset_index()
 
