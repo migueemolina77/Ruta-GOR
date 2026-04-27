@@ -52,7 +52,7 @@ st.title("🚜 Plan de Movilización Numerado")
 colores_tramos = ['#E74C3C', '#2ECC71', '#3498DB', '#F1C40F', '#9B59B6', '#E67E22']
 
 try:
-    df_maestro = cargar_base_coordenadas("Coordenadas Rubiales.xlsx")
+    df_maestro = cargar_base_coordenadas("Coordenadas.xlsx")
 
     st.sidebar.header("Orden de Movilización")
     ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:", placeholder="RB-162\nRB-269\nRB-119")
