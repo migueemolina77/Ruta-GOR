@@ -25,18 +25,17 @@ def obtener_tramo_real(punto_a, punto_b):
 
 @st.cache_data
 def cargar_base_coordenadas(file_path):
-    # CAMBIO 1: header=0 porque ahora los títulos están en la primera fila
+    # Leemos desde la fila 1 (header=0) según tu nuevo Excel
     df = pd.read_excel(file_path, header=0)
     
-    # Limpieza de nombres de columnas
+    # Limpiamos nombres de columnas y pasamos a mayúsculas
     df.columns = df.columns.astype(str).str.strip().str.upper()
     
-    # CAMBIO 2: Usar los nombres exactos del nuevo Excel (LATITUD / LONGITUD)
-    # Como ya son decimales, solo nos aseguramos de que sean números
+    # Convertimos coordenadas a números (ya vienen en decimal)
     df['lat_dec'] = pd.to_numeric(df['LATITUD'], errors='coerce')
     df['lon_dec'] = pd.to_numeric(df['LONGITUD'], errors='coerce')
     
-    # Agrupamos por CLUSTER (en mayúsculas como tu Excel)
+    # Agrupamos por CLUSTER y unimos los pozos
     return df.dropna(subset=['lat_dec', 'lon_dec']).groupby('CLUSTER').agg({
         'lat_dec': 'first', 
         'lon_dec': 'first', 
@@ -48,33 +47,37 @@ st.title("🚜 Plan de Movilización Numerado - GOR")
 colores_tramos = ['#E74C3C', '#2ECC71', '#3498DB', '#F1C40F', '#9B59B6', '#E67E22']
 
 try:
-    # Carga del nuevo archivo
+    # Carga de la base de datos actualizada
     df_maestro = cargar_base_coordenadas("COORDENADAS GOR.xlsx")
 
     st.sidebar.header("Orden de Movilización")
-    st.sidebar.write("Ejemplo: CLUSTER FAUNO, MITO 1")
-    ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:", placeholder="CLUSTER FAUNO\nMITO 1\nESTRACASU 4")
+    st.sidebar.info("Puedes usar 'CASE' para 'CAÑO SUR ESTE'")
     
-    # Normalizamos la entrada del usuario a mayúsculas
+    ruta_input = st.sidebar.text_area("Pega los Clústeres en orden:", placeholder="CASE-027\nMITO 1\nRB-149")
     nombres_ruta = [n.strip().upper() for n in re.split(r'[\n,]+', ruta_input) if n.strip()]
 
     puntos_ruta = []
-    for i, nombre in enumerate(nombres_ruta):
-        match = df_maestro[df_maestro['CLUSTER'].astype(str).str.upper() == nombre]
+    for i, texto_buscado in enumerate(nombres_ruta):
+        # Lógica de traducción automática para CASE
+        termino_para_buscar = texto_buscado.replace("CASE", "CAÑO SUR ESTE")
+        
+        # Búsqueda flexible (contiene el texto)
+        match = df_maestro[df_maestro['CLUSTER'].astype(str).str.upper().str.contains(termino_para_buscar, na=False)]
+        
         if not match.empty:
             puntos_ruta.append({
                 'orden': i + 1,
-                'nombre': nombre, 
+                'nombre': match.iloc[0]['CLUSTER'], 
                 'lat': match.iloc[0]['lat_dec'], 
                 'lon': match.iloc[0]['lon_dec'], 
                 'pozos': match.iloc[0]['POZO']
             })
 
-    # Centro del mapa basado en los datos cargados
-    lat_inicial = df_maestro['lat_dec'].mean() if not df_maestro.empty else 3.7
-    lon_inicial = df_maestro['lon_dec'].mean() if not df_maestro.empty else -71.7
+    # Centro del mapa (promedio de la base de datos)
+    lat_ini = df_maestro['lat_dec'].mean() if not df_maestro.empty else 3.7
+    lon_ini = df_maestro['lon_dec'].mean() if not df_maestro.empty else -71.7
     
-    m = folium.Map(location=[lat_inicial, lon_inicial], zoom_start=11)
+    m = folium.Map(location=[lat_ini, lon_ini], zoom_start=11)
 
     if len(puntos_ruta) >= 2:
         resumen_ruta = []
@@ -99,14 +102,16 @@ try:
         st.sidebar.table(resumen_ruta)
         st.sidebar.metric("Distancia Total de Campaña", f"{total_km:.2f} Km")
 
-    # Marcadores
+    # Dibujar Marcadores y Números
     for p in puntos_ruta:
+        # Icono de pozo
         folium.Marker(
             location=[p['lat'], p['lon']],
             popup=f"<b>({p['orden']}) CLUSTER: {p['nombre']}</b><br>Pozos: {p['pozos']}",
             icon=folium.Icon(color='black', icon='oil-well', prefix='fa')
         ).add_to(m)
 
+        # Número de orden flotante
         folium.map.Marker(
             [p['lat'], p['lon']],
             icon=DivIcon(
@@ -119,5 +124,4 @@ try:
     st_folium(m, width=1100, height=600, returned_objects=[])
 
 except Exception as e:
-    st.error(f"Error detectado: {e}")
-    st.info("Asegúrate de que el archivo 'COORDENADAS GOR.xlsx' esté en GitHub y tenga las columnas: CLUSTER, POZO, LATITUD, LONGITUD.")
+    st.error(f"Error: {e}")
