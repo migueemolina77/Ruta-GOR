@@ -40,7 +40,7 @@ def obtener_tramo_real(punto_a, punto_b):
 @st.cache_data
 def cargar_base_coordenadas(file_path):
     # Se mantiene header=6 asumiendo que los títulos están en la fila 7
-    df = pd.read_excel(file_path, header=1)
+    df = pd.read_excel(file_path, header=0)
     # Limpieza de nombres de columnas para evitar errores de espacios
     df.columns = df.columns.astype(str).str.strip()
     
