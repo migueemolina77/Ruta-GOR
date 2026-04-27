@@ -33,7 +33,7 @@ try:
     nombre_archivo = "Coordenadas Rubiales.xlsx"
     
     # MODIFICACIÓN: header=2 le indica que los títulos reales están en la fila 3 de Excel
-    df = pd.read_excel(nombre_archivo, header=2)
+    df = pd.read_excel(nombre_archivo, header=7)
     
     # Limpiamos nombres de columnas (quita espacios al inicio/final si los hay)
     df.columns = df.columns.astype(str).str.strip()
